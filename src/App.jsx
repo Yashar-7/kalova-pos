@@ -28,7 +28,7 @@ function createProduct({
   }
 }
 
-const STORAGE_PRODUCTS_KEY = 'pet-shop:inventory-v1'
+const STORAGE_PRODUCTS_KEY = 'pet-shop:inventory-v2'
 const STORAGE_SALES_KEY = 'pet-shop:ventas-del-dia-v1'
 
 function getTodayKey() {
@@ -55,11 +55,11 @@ function normalizeProduct(p) {
 function loadPersistedProducts() {
   try {
     const raw = localStorage.getItem(STORAGE_PRODUCTS_KEY)
-    if (!raw) return null
+    if (raw === null) return []
     const parsed = JSON.parse(raw)
-    if (!Array.isArray(parsed) || parsed.length === 0) return null
+    if (!Array.isArray(parsed)) return []
     let autoBarcode = 779_000_000_000_1
-    const list = parsed
+    return parsed
       .map(normalizeProduct)
       .filter(Boolean)
       .map((item) => {
@@ -67,9 +67,8 @@ function loadPersistedProducts() {
         const b = String(autoBarcode++)
         return { ...item, barcode: b }
       })
-    return list.length > 0 ? list : null
   } catch {
-    return null
+    return []
   }
 }
 
@@ -86,47 +85,6 @@ function loadPersistedSalesState() {
   } catch {
     return { total: 0, transactions: 0 }
   }
-}
-
-function getDefaultProducts() {
-  return [
-    createProduct({
-      name: 'Pro Plan Adulto 15kg',
-      category: 'Alimento para perros',
-      stock: 8,
-      priceSale: 189500,
-      barcode: '7790123456001',
-    }),
-    createProduct({
-      name: 'Royal Canin Gato 3kg',
-      category: 'Alimento para gatos',
-      stock: 4,
-      priceSale: 98500,
-      barcode: '7790123456002',
-    }),
-    createProduct({
-      name: 'Pipeta Frontline',
-      category: 'Antiparasitarios',
-      stock: 22,
-      priceSale: 28500,
-      barcode: '7790123456003',
-    }),
-    createProduct({
-      name: 'Mordillo Soga',
-      category: 'Juguetes',
-      stock: 15,
-      priceSale: 12500,
-      barcode: '7790123456004',
-    }),
-    createProduct({
-      name: 'Bolsa Alimento Suelto',
-      category: 'Alimento suelto',
-      stock: 18500,
-      priceSale: 6900,
-      isLooseFood: true,
-      barcode: '7790123456005',
-    }),
-  ]
 }
 
 function formatArs(value) {
@@ -165,9 +123,7 @@ function downloadTextFile(filename, content) {
 
 export default function App() {
   const savedSales = loadPersistedSalesState()
-  const [products, setProducts] = useState(
-    () => loadPersistedProducts() ?? getDefaultProducts(),
-  )
+  const [products, setProducts] = useState(() => loadPersistedProducts())
   const [dailySales, setDailySales] = useState(savedSales.total)
   const [saleTransactions, setSaleTransactions] = useState(
     savedSales.transactions,
@@ -187,12 +143,30 @@ export default function App() {
     barcode: '',
     isLooseFood: false,
   })
+  const [editingProductId, setEditingProductId] = useState(null)
+  const [editForm, setEditForm] = useState({
+    name: '',
+    category: '',
+    stock: '',
+    priceSale: '',
+    barcode: '',
+    isLooseFood: false,
+  })
+  const [deleteConfirm, setDeleteConfirm] = useState(null)
+  const [showCameraScanner, setShowCameraScanner] = useState(false)
+  const [showF1Hint, setShowF1Hint] = useState(() =>
+    typeof window !== 'undefined'
+      ? window.matchMedia('(min-width: 640px)').matches
+      : true,
+  )
 
   const productSearchRef = useRef(null)
   const searchScanBufRef = useRef('')
   const searchScanTimerRef = useRef(null)
   const lastSearchDigitAtRef = useRef(0)
   const [scannerFeed, setScannerFeed] = useState(null)
+  const handleScanCodeRef = useRef(null)
+  const cameraScannerRef = useRef(null)
 
   const filtered = useMemo(() => {
     const q = query.trim()
@@ -294,7 +268,15 @@ export default function App() {
     (raw) => {
       const digits = String(raw ?? '').replace(/\D/g, '')
       if (digits.length < MIN_CODE_LEN) return
-      if (showAddForm || saleGramsProductId) return
+      if (
+        showAddForm ||
+        saleGramsProductId ||
+        editingProductId ||
+        deleteConfirm ||
+        showCameraScanner
+      ) {
+        return
+      }
 
       const p = products.find((x) => x.barcode === digits)
       if (!p) {
@@ -330,13 +312,39 @@ export default function App() {
         showSaleToast(p.name, revenue)
       }
     },
-    [products, showAddForm, saleGramsProductId, showSaleToast],
+    [
+      products,
+      showAddForm,
+      saleGramsProductId,
+      showSaleToast,
+      editingProductId,
+      deleteConfirm,
+      showCameraScanner,
+    ],
   )
+
+  handleScanCodeRef.current = handleScanCode
+
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 640px)')
+    function sync() {
+      setShowF1Hint(mq.matches)
+    }
+    sync()
+    mq.addEventListener('change', sync)
+    return () => mq.removeEventListener('change', sync)
+  }, [])
 
   useEffect(() => {
     function onF1(e) {
       if (e.key !== 'F1') return
-      if (showAddForm || saleGramsProductId) {
+      if (
+        showAddForm ||
+        saleGramsProductId ||
+        editingProductId ||
+        deleteConfirm ||
+        showCameraScanner
+      ) {
         e.preventDefault()
         return
       }
@@ -349,16 +357,84 @@ export default function App() {
     }
     window.addEventListener('keydown', onF1, true)
     return () => window.removeEventListener('keydown', onF1, true)
-  }, [showAddForm, saleGramsProductId])
+  }, [
+    showAddForm,
+    saleGramsProductId,
+    editingProductId,
+    deleteConfirm,
+    showCameraScanner,
+  ])
 
   useEffect(() => {
     function onEsc(e) {
       if (e.key !== 'Escape') return
+      if (showCameraScanner) {
+        setShowCameraScanner(false)
+        return
+      }
+      if (deleteConfirm) {
+        setDeleteConfirm(null)
+        return
+      }
+      if (editingProductId) {
+        setEditingProductId(null)
+        return
+      }
       setIsScanning(false)
     }
     window.addEventListener('keydown', onEsc)
     return () => window.removeEventListener('keydown', onEsc)
-  }, [])
+  }, [showCameraScanner, deleteConfirm, editingProductId])
+
+  useEffect(() => {
+    if (!showCameraScanner) return undefined
+
+    let cancelled = false
+
+    import('html5-qrcode').then(
+      ({ Html5QrcodeScanner, Html5QrcodeSupportedFormats }) => {
+        if (cancelled) return
+
+        const scanner = new Html5QrcodeScanner(
+          'kalova-camera-reader',
+          {
+            fps: 12,
+            qrbox: { width: 280, height: 160 },
+            aspectRatio: 1.777778,
+            formatsToSupport: [
+              Html5QrcodeSupportedFormats.EAN_13,
+              Html5QrcodeSupportedFormats.EAN_8,
+              Html5QrcodeSupportedFormats.CODE_128,
+              Html5QrcodeSupportedFormats.UPC_A,
+              Html5QrcodeSupportedFormats.UPC_E,
+              Html5QrcodeSupportedFormats.QR_CODE,
+            ],
+          },
+          false,
+        )
+        cameraScannerRef.current = scanner
+        scanner.render(
+          (decodedText) => {
+            const digits = String(decodedText).replace(/\D/g, '')
+            if (digits.length < MIN_CODE_LEN) return
+            handleScanCodeRef.current?.(digits)
+            void scanner.clear().finally(() => {
+              cameraScannerRef.current = null
+              setShowCameraScanner(false)
+            })
+          },
+          () => {},
+        )
+      },
+    )
+
+    return () => {
+      cancelled = true
+      const s = cameraScannerRef.current
+      cameraScannerRef.current = null
+      if (s) void s.clear().catch(() => {})
+    }
+  }, [showCameraScanner])
 
   useEffect(() => {
     return () => {
@@ -467,6 +543,10 @@ export default function App() {
     const barcode =
       barcodeRaw ||
       `780${String(Date.now()).slice(-10)}${String(products.length)}`
+    if (products.some((x) => x.barcode === barcode)) {
+      setToast('Ya existe un producto con ese código de barras.')
+      return
+    }
     setProducts((prev) => [
       ...prev,
       createProduct({
@@ -487,6 +567,67 @@ export default function App() {
       isLooseFood: false,
     })
     setShowAddForm(false)
+  }
+
+  function abrirEdicionProducto(p) {
+    setEditingProductId(p.id)
+    setEditForm({
+      name: p.name,
+      category: p.category,
+      stock: String(p.stock),
+      priceSale: String(p.priceSale),
+      barcode: p.barcode,
+      isLooseFood: p.isLooseFood,
+    })
+  }
+
+  function editarProducto(e) {
+    e.preventDefault()
+    if (!editingProductId) return
+    const name = editForm.name.trim()
+    const category = editForm.category.trim()
+    const stock = Number(String(editForm.stock).replace(',', '.'))
+    const priceSale = Number(String(editForm.priceSale).replace(',', '.'))
+    if (!name || !category || !Number.isFinite(stock) || stock < 0) return
+    if (!Number.isFinite(priceSale) || priceSale < 0) return
+    const stockInt = Math.floor(stock)
+    const barcodeRaw = editForm.barcode.trim().replace(/\D/g, '')
+    const barcode =
+      barcodeRaw ||
+      `780${String(Date.now()).slice(-10)}${String(products.length)}`
+    if (
+      products.some(
+        (x) => x.barcode === barcode && x.id !== editingProductId,
+      )
+    ) {
+      setToast('Ya existe otro producto con ese código de barras.')
+      return
+    }
+    setProducts((prev) =>
+      prev.map((item) =>
+        item.id === editingProductId
+          ? {
+              ...item,
+              name,
+              category,
+              stock: stockInt,
+              priceSale,
+              isLooseFood: editForm.isLooseFood,
+              barcode,
+            }
+          : item,
+      ),
+    )
+    setEditingProductId(null)
+    setToast('Producto actualizado.')
+  }
+
+  function eliminarProducto() {
+    const t = deleteConfirm
+    if (!t) return
+    setProducts((prev) => prev.filter((x) => x.id !== t.id))
+    setDeleteConfirm(null)
+    setToast(`Eliminado: ${t.name}`)
   }
 
   const todayLongLabel = useMemo(
@@ -571,8 +712,14 @@ export default function App() {
 
       <header className="mx-auto max-w-5xl px-4 pb-2 pt-6 sm:px-6 lg:px-8">
         <p className="max-w-xl text-sm font-medium leading-relaxed text-gray-400">
-          Centro de comando: ventas, escáner por código (F1 en búsqueda) y
-          stock crítico en alerta roja. Granel abre el módulo de peso.
+          <span className="hidden sm:inline">
+            Centro de comando: ventas, escáner por código (F1 en búsqueda),
+            lector con cámara en móvil y stock crítico en alerta roja.
+          </span>
+          <span className="sm:hidden">
+            Ventas e inventario táctico: escaneá con la cámara o buscá por
+            nombre. Granel abre el módulo de peso.
+          </span>
         </p>
       </header>
 
@@ -643,7 +790,7 @@ export default function App() {
           </div>
         </section>
 
-        <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
           <div className="relative w-full sm:max-w-md">
             <span
               className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
@@ -671,16 +818,50 @@ export default function App() {
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={onProductSearchKeyDown}
               onBlur={() => setIsScanning(false)}
-              placeholder="Buscar por nombre o escanear código (F1)…"
+              placeholder={
+                showF1Hint
+                  ? 'Buscar por nombre o escanear código (F1)…'
+                  : 'Buscar por nombre o código de barras…'
+              }
               autoComplete="off"
               className="w-full rounded-xl border border-red-900/50 bg-[#121214] py-2.5 pl-10 pr-4 text-sm font-medium text-white placeholder:text-gray-500 outline-none ring-[#ff003c]/25 transition focus:border-[#ff003c]/40 focus:ring-2"
             />
           </div>
-          <p className="text-xs text-gray-400">
-            {filtered.length} producto
-            {filtered.length !== 1 ? 's' : ''} visible
-            {query.trim() ? ` · filtro «${query.trim()}»` : ''}
-          </p>
+          <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+            <button
+              type="button"
+              onClick={() => setShowCameraScanner(true)}
+              disabled={showAddForm || editingProductId || saleGramsProductId}
+              className="inline-flex items-center gap-2 rounded-xl border border-red-900/50 bg-[#121214] px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-white shadow-[inset_0_1px_0_rgb(255_0_60_/0.12)] transition hover:border-[#ff003c]/35 hover:text-[#ff003c] disabled:cursor-not-allowed disabled:opacity-40"
+              aria-label="Abrir escaneo con cámara"
+            >
+              <svg
+                className="h-4 w-4 shrink-0 text-[#ff003c]"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={2}
+                aria-hidden
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"
+                />
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"
+                />
+              </svg>
+              Escaneo con cámara
+            </button>
+            <p className="text-xs text-gray-400">
+              {filtered.length} producto
+              {filtered.length !== 1 ? 's' : ''} visible
+              {query.trim() ? ` · «${query.trim()}»` : ''}
+            </p>
+          </div>
         </div>
 
         <div
@@ -712,7 +893,9 @@ export default function App() {
             </span>
             <div className="min-w-0 flex-1">
               <p className="text-[11px] font-bold uppercase tracking-wide text-[#ff003c]">
-                MODO ESCÁNER ACTIVO (Presiona F1 para buscar por código)
+                {showF1Hint
+                  ? 'MODO ESCÁNER ACTIVO (Presiona F1 para buscar por código)'
+                  : 'MODO ESCÁNER — Usá «Escaneo con cámara» o escribí el código en la búsqueda'}
               </p>
               {scannerFeed && (
                 <p
@@ -731,24 +914,29 @@ export default function App() {
 
         <div className="overflow-hidden rounded-2xl border border-red-900/50 bg-[#121214] shadow-[0_0_32px_rgb(0_0_0_/0.25)]">
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[720px] border-collapse text-left text-sm">
+            <table className="w-full min-w-[900px] border-collapse text-left text-sm">
               <thead>
                 <tr className="border-b border-white/5 bg-[#121214]/95 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
                   <th className="px-4 py-3.5">Nombre</th>
                   <th className="px-4 py-3.5">Categoría</th>
                   <th className="px-4 py-3.5 text-right">Stock</th>
                   <th className="px-4 py-3.5 text-right">Precio venta</th>
-                  <th className="px-4 py-3.5 text-right">Acción</th>
+                  <th className="px-4 py-3.5 text-right">Venta</th>
+                  <th className="px-4 py-3.5 text-right">Gestión</th>
                 </tr>
               </thead>
               <tbody>
                 {filtered.length === 0 ? (
                   <tr>
                     <td
-                      colSpan={5}
+                      colSpan={6}
                       className="px-4 py-14 text-center text-gray-400"
                     >
-                      No hay coincidencias para «{query.trim()}».
+                      {products.length === 0
+                        ? 'No hay productos cargados. Usá «Nuevo producto» para comenzar.'
+                        : query.trim()
+                          ? `No hay coincidencias para «${query.trim()}».`
+                          : 'Sin resultados.'}
                     </td>
                   </tr>
                 ) : (
@@ -799,6 +987,56 @@ export default function App() {
                           >
                             Venta
                           </button>
+                        </td>
+                        <td className="px-4 py-3.5 text-right">
+                          <div className="flex justify-end gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => abrirEdicionProducto(p)}
+                              className="rounded-lg border border-white/10 bg-[#1a1a1c] p-2 text-zinc-400 transition hover:border-[#ff003c]/40 hover:text-[#ff003c]"
+                              aria-label={`Editar ${p.name}`}
+                              title="Editar"
+                            >
+                              <svg
+                                className="h-4 w-4"
+                                fill="none"
+                                viewBox="0 0 24 24"
+                                stroke="currentColor"
+                                strokeWidth={2}
+                                aria-hidden
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                                />
+                              </svg>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setDeleteConfirm({ id: p.id, name: p.name })
+                              }
+                              className="rounded-lg border border-red-900/50 bg-[#1a1a1c] p-2 text-red-400/90 transition hover:border-[#ff003c]/55 hover:bg-[#ff003c]/10 hover:text-[#ff003c]"
+                              aria-label={`Eliminar ${p.name}`}
+                              title="Eliminar"
+                            >
+                              <svg
+                                className="h-4 w-4"
+                                fill="none"
+                                viewBox="0 0 24 24"
+                                stroke="currentColor"
+                                strokeWidth={2}
+                                aria-hidden
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                                />
+                              </svg>
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     )
@@ -959,7 +1197,7 @@ export default function App() {
       {/* Modal: nuevo producto */}
       {showAddForm && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-md"
           data-no-scan
           role="dialog"
           aria-modal="true"
@@ -967,15 +1205,23 @@ export default function App() {
         >
           <form
             onSubmit={handleAddProduct}
-            className="w-full max-w-md rounded-2xl border border-red-900/50 bg-[#121214] p-6 shadow-[0_0_40px_rgb(0_0_0_/0.4)]"
+            className="w-full max-w-md overflow-hidden rounded-2xl border border-red-900/50 bg-[#121214] shadow-[0_0_50px_rgb(0_0_0_/0.45)]"
           >
-            <h2
-              id="new-product-title"
-              className="text-lg font-semibold text-white"
-            >
-              Nuevo producto
-            </h2>
-            <div className="mt-4 grid gap-3">
+            <div className="border-b border-red-900/50 bg-gradient-to-r from-[#ff003c]/12 via-[#121214] to-[#1a1a1c] px-6 py-4">
+              <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-[#ff003c]">
+                Alta de inventario
+              </p>
+              <h2
+                id="new-product-title"
+                className="mt-1 text-lg font-semibold text-white"
+              >
+                Nuevo producto
+              </h2>
+              <p className="mt-1 text-xs text-gray-500">
+                Los datos se guardan en este dispositivo (localStorage).
+              </p>
+            </div>
+            <div className="grid gap-3 px-6 py-5">
               <div>
                 <label className="text-xs text-gray-400">Nombre</label>
                 <input
@@ -1059,22 +1305,249 @@ export default function App() {
                 Alimento suelto (stock en gramos; venta por gramos)
               </label>
             </div>
-            <div className="mt-6 flex justify-end gap-2">
+            <div className="flex justify-end gap-2 border-t border-white/5 bg-[#1a1a1c]/70 px-6 py-4">
               <button
                 type="button"
-                className="rounded-lg border-2 border-white bg-transparent px-3 py-2 text-xs font-semibold text-white hover:bg-white/10"
+                className="rounded-lg border-2 border-white/25 bg-transparent px-4 py-2 text-xs font-semibold text-white transition hover:bg-white/10"
                 onClick={() => setShowAddForm(false)}
               >
                 Cerrar
               </button>
               <button
                 type="submit"
-                className="rounded-lg bg-[#ff003c] px-3 py-2 text-xs font-semibold text-white shadow-[0_0_20px_rgb(255_0_60_/0.38)] hover:brightness-110"
+                className="rounded-lg bg-[#ff003c] px-4 py-2 text-xs font-semibold text-white shadow-[0_0_20px_rgb(255_0_60_/0.38)] transition hover:brightness-110"
               >
                 Guardar
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {/* Modal: editar producto */}
+      {editingProductId && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-md"
+          data-no-scan
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="edit-product-title"
+        >
+          <form
+            onSubmit={editarProducto}
+            className="w-full max-w-md overflow-hidden rounded-2xl border border-red-900/50 bg-[#121214] shadow-[0_0_55px_rgb(190_0_40_/0.12),0_0_60px_rgb(0_0_0_/0.55)]"
+          >
+            <div className="border-b border-red-900/50 bg-gradient-to-r from-[#ff003c]/15 via-[#121214] to-[#1a1a1c] px-6 py-4">
+              <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-[#ff003c]">
+                Edición de producto
+              </p>
+              <h2
+                id="edit-product-title"
+                className="mt-1 text-lg font-semibold leading-snug text-white"
+              >
+                {editForm.name || 'Sin nombre'}
+              </h2>
+              <p className="mt-1 font-mono text-[11px] text-gray-500">
+                ID interno · {editingProductId}
+              </p>
+            </div>
+            <div className="grid gap-3 px-6 py-5">
+              <div>
+                <label className="text-xs font-medium uppercase tracking-wide text-gray-400">
+                  Nombre
+                </label>
+                <input
+                  required
+                  value={editForm.name}
+                  onChange={(e) =>
+                    setEditForm((f) => ({ ...f, name: e.target.value }))
+                  }
+                  className="mt-1 w-full rounded-xl border border-white/10 bg-[#1a1a1c] px-3 py-2.5 text-sm font-medium text-white outline-none ring-[#ff003c]/20 transition focus:border-[#ff003c]/45 focus:ring-2"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium uppercase tracking-wide text-gray-400">
+                  Categoría
+                </label>
+                <input
+                  required
+                  value={editForm.category}
+                  onChange={(e) =>
+                    setEditForm((f) => ({ ...f, category: e.target.value }))
+                  }
+                  className="mt-1 w-full rounded-xl border border-white/10 bg-[#1a1a1c] px-3 py-2.5 text-sm font-medium text-white outline-none ring-[#ff003c]/20 transition focus:border-[#ff003c]/45 focus:ring-2"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium uppercase tracking-wide text-gray-400">
+                  Código de barras (EAN)
+                </label>
+                <input
+                  value={editForm.barcode}
+                  onChange={(e) =>
+                    setEditForm((f) => ({ ...f, barcode: e.target.value }))
+                  }
+                  placeholder="Numérico"
+                  inputMode="numeric"
+                  className="mt-1 w-full rounded-xl border border-white/10 bg-[#1a1a1c] px-3 py-2.5 text-sm font-medium text-white outline-none ring-[#ff003c]/20 placeholder:text-gray-600 focus:border-[#ff003c]/45 focus:ring-2"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-medium uppercase tracking-wide text-gray-400">
+                    Stock {editForm.isLooseFood ? '(g)' : '(u.)'}
+                  </label>
+                  <input
+                    required
+                    min={0}
+                    type="number"
+                    value={editForm.stock}
+                    onChange={(e) =>
+                      setEditForm((f) => ({ ...f, stock: e.target.value }))
+                    }
+                    className="mt-1 w-full rounded-xl border border-white/10 bg-[#1a1a1c] px-3 py-2.5 text-sm font-medium text-white outline-none ring-[#ff003c]/20 focus:border-[#ff003c]/45 focus:ring-2"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-medium uppercase tracking-wide text-gray-400">
+                    Precio venta (ARS)
+                    {editForm.isLooseFood && (
+                      <span className="font-normal normal-case text-gray-500">
+                        {' '}
+                        /kg
+                      </span>
+                    )}
+                  </label>
+                  <input
+                    required
+                    min={0}
+                    type="number"
+                    value={editForm.priceSale}
+                    onChange={(e) =>
+                      setEditForm((f) => ({ ...f, priceSale: e.target.value }))
+                    }
+                    className="mt-1 w-full rounded-xl border border-white/10 bg-[#1a1a1c] px-3 py-2.5 text-sm font-medium text-white outline-none ring-[#ff003c]/20 focus:border-[#ff003c]/45 focus:ring-2"
+                  />
+                </div>
+              </div>
+              <label className="flex cursor-pointer items-center gap-2 text-sm text-gray-400">
+                <input
+                  type="checkbox"
+                  checked={editForm.isLooseFood}
+                  onChange={(e) =>
+                    setEditForm((f) => ({
+                      ...f,
+                      isLooseFood: e.target.checked,
+                    }))
+                  }
+                  className="rounded border-white/20 bg-[#1a1a1c] accent-[#ff003c]"
+                />
+                Alimento suelto (stock y venta en gramos)
+              </label>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-white/5 bg-[#1a1a1c]/80 px-6 py-4">
+              <button
+                type="button"
+                className="rounded-lg border-2 border-white/25 bg-transparent px-4 py-2 text-xs font-semibold text-white transition hover:bg-white/10"
+                onClick={() => setEditingProductId(null)}
+              >
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                className="rounded-lg bg-[#ff003c] px-4 py-2 text-xs font-semibold text-white shadow-[0_0_22px_rgb(255_0_60_/0.4)] transition hover:brightness-110"
+              >
+                Guardar cambios
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Modal: confirmar eliminación */}
+      {deleteConfirm && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-md"
+          data-no-scan
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="delete-title"
+        >
+          <div className="w-full max-w-sm overflow-hidden rounded-2xl border border-red-900/50 bg-[#121214] shadow-[0_0_40px_rgb(0_0_0_/0.5)]">
+            <div className="border-b border-red-900/50 px-6 py-4">
+              <h2
+                id="delete-title"
+                className="text-base font-semibold text-white"
+              >
+                ¿Eliminar producto?
+              </h2>
+              <p className="mt-2 text-sm leading-relaxed text-gray-400">
+                Se quitará{' '}
+                <span className="font-medium text-zinc-200">
+                  {deleteConfirm.name}
+                </span>{' '}
+                del inventario local. Esta acción no se puede deshacer.
+              </p>
+            </div>
+            <div className="flex justify-end gap-2 bg-[#1a1a1c]/80 px-6 py-4">
+              <button
+                type="button"
+                className="rounded-lg border-2 border-white/25 bg-transparent px-4 py-2 text-xs font-semibold text-white transition hover:bg-white/10"
+                onClick={() => setDeleteConfirm(null)}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={eliminarProducto}
+                className="rounded-lg bg-[#ff003c] px-4 py-2 text-xs font-semibold text-white shadow-[0_0_20px_rgb(255_0_60_/0.35)] transition hover:brightness-110"
+              >
+                Eliminar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: escaneo con cámara (html5-qrcode) */}
+      {showCameraScanner && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/85 p-4 backdrop-blur-md"
+          data-no-scan
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="camera-scan-title"
+        >
+          <div className="max-h-[min(92vh,640px)] w-full max-w-lg overflow-hidden rounded-2xl border border-red-900/50 bg-[#121214] shadow-[0_0_48px_rgb(255_0_60_/0.15)]">
+            <div className="flex items-start justify-between gap-3 border-b border-red-900/50 px-5 py-4">
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-[#ff003c]">
+                  Lector móvil
+                </p>
+                <h2
+                  id="camera-scan-title"
+                  className="mt-1 text-base font-semibold text-white"
+                >
+                  Escaneo con cámara
+                </h2>
+                <p className="mt-1 text-xs text-gray-500">
+                  Permití acceso a la cámara. Apuntá al código de barras o QR
+                  del producto.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCameraScanner(false)}
+                className="shrink-0 rounded-lg border border-white/15 px-2.5 py-1 text-xs font-semibold text-gray-400 transition hover:border-[#ff003c]/40 hover:text-white"
+                aria-label="Cerrar escáner"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="kalova-html5-qrcode-wrap max-h-[min(72vh,520px)] overflow-auto p-4">
+              <div id="kalova-camera-reader" className="min-h-[200px]" />
+            </div>
+          </div>
         </div>
       )}
     </div>

@@ -40,3 +40,34 @@
     border-color: rgb(220 38 38 / 0.65);
   }
 }
+
+/* html5-qrcode — tema oscuro KaloVa dentro del modal */
+.kalova-html5-qrcode-wrap #kalova-camera-reader {
+  color: rgb(228 228 231);
+}
+
+.kalova-html5-qrcode-wrap #kalova-camera-reader a {
+  color: #ff003c;
+}
+
+.kalova-html5-qrcode-wrap #kalova-camera-reader select {
+  border-radius: 0.5rem;
+  border: 1px solid rgb(127 29 29 / 0.45);
+  background: #1a1a1c;
+  color: rgb(244 244 245);
+  padding: 0.35rem 0.5rem;
+}
+
+.kalova-html5-qrcode-wrap #kalova-camera-reader button.html5-qrcode-element {
+  border-radius: 0.5rem;
+  border: 1px solid rgb(127 29 29 / 0.55);
+  background: #121214;
+  color: rgb(244 244 245);
+  padding: 0.5rem 0.75rem;
+  font-size: 0.8rem;
+}
+
+.kalova-html5-qrcode-wrap #kalova-camera-reader button.html5-qrcode-element:hover {
+  border-color: rgb(255 0 60 / 0.45);
+  color: #ff003c;
+}
