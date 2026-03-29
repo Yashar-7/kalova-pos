@@ -192,6 +192,33 @@ function playScanBeep() {
   }
 }
 
+/** Doble tono tipo caja registradora al cerrar venta. */
+function playCajaRegistradoraBeep() {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext
+    if (!Ctx) return
+    const ctx = new Ctx()
+    const play = (freq, delaySec, dur) => {
+      const o = ctx.createOscillator()
+      const g = ctx.createGain()
+      o.connect(g)
+      g.connect(ctx.destination)
+      o.type = 'square'
+      o.frequency.value = freq
+      const t = ctx.currentTime + delaySec
+      g.gain.setValueAtTime(0.1, t)
+      g.gain.exponentialRampToValueAtTime(0.001, t + dur)
+      o.start(t)
+      o.stop(t + dur)
+    }
+    play(1560, 0, 0.05)
+    play(1180, 0.08, 0.08)
+    setTimeout(() => void ctx.close(), 350)
+  } catch {
+    playScanBeep()
+  }
+}
+
 function CameraIcon(props) {
   return (
     <svg
@@ -520,25 +547,48 @@ export default function App() {
     })
   }
 
+  /** Después de cobrar: carrito, montos, vuelto (derivado), búsqueries y foco en escáner. */
+  function resetTacticoVenta() {
+    if (searchScanTimerRef.current) {
+      window.clearTimeout(searchScanTimerRef.current)
+      searchScanTimerRef.current = null
+    }
+    searchScanBufRef.current = ''
+    lastSearchDigitAtRef.current = 0
+    setCart([])
+    setPagaCon('')
+    setQuery('')
+    setScannerFeed(null)
+    setIsScanning(false)
+    playCajaRegistradoraBeep()
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        productSearchRef.current?.focus()
+        productSearchRef.current?.select?.()
+      })
+    })
+  }
+
   function finalizeSale(methodKey) {
     if (cart.length === 0) {
       setToast('El carrito está vacío.')
       return
     }
+    const lines = [...cart]
+    const total = lines.reduce((s, l) => s + l.lineTotal, 0)
     if (methodKey === 'efectivo') {
       const p = Number(String(pagaCon).replace(',', '.'))
-      if (!Number.isFinite(p) || p < cartTotal) {
+      if (!Number.isFinite(p) || p < total) {
         setToast('En efectivo, «Paga con» debe ser ≥ total.')
         return
       }
     }
-    const total = cartTotal
     const saleRecord = {
       id: `s-${Date.now()}`,
       ts: Date.now(),
       method: methodKey,
       total,
-      items: cart.map((l) => ({
+      items: lines.map((l) => ({
         productId: l.productId,
         name: l.name,
         qty: l.isLooseFood ? 0 : l.qty,
@@ -548,7 +598,7 @@ export default function App() {
         lineTotal: l.lineTotal,
       })),
     }
-    applyStockFromCart(cart)
+    applyStockFromCart(lines)
     setCaja((c) => ({
       ...c,
       total: c.total + total,
@@ -559,10 +609,24 @@ export default function App() {
       },
       sales: [...c.sales, saleRecord],
     }))
-    setCart([])
-    setPagaCon('')
-    playScanBeep()
+    resetTacticoVenta()
     setToast(`Venta ${PAYMENT_METHODS.find((m) => m.key === methodKey)?.label || ''}: ${formatArs(total)}`)
+  }
+
+  function confirmarPagoEfectivo() {
+    finalizeSale('efectivo')
+  }
+
+  function confirmarPagoTarjeta() {
+    finalizeSale('tarjeta')
+  }
+
+  function confirmarPagoQr() {
+    finalizeSale('qr')
+  }
+
+  function confirmarPagoTransferencia() {
+    finalizeSale('transferencia')
   }
 
   function confirmCartLooseGrams() {
@@ -1237,7 +1301,12 @@ export default function App() {
                     <button
                       key={m.key}
                       type="button"
-                      onClick={() => finalizeSale(m.key)}
+                      onClick={() => {
+                        if (m.key === 'efectivo') confirmarPagoEfectivo()
+                        else if (m.key === 'tarjeta') confirmarPagoTarjeta()
+                        else if (m.key === 'qr') confirmarPagoQr()
+                        else confirmarPagoTransferencia()
+                      }}
                       disabled={cart.length === 0}
                       style={{ backgroundColor: m.bg }}
                       className="min-h-[64px] rounded-2xl px-2 py-3 text-sm font-extrabold uppercase leading-tight text-white shadow-lg transition hover:brightness-110 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-35"
