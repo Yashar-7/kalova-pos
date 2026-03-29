@@ -1,0 +1,42 @@
+@import "tailwindcss";
+
+/* KaloVa — Dark Warfare */
+@theme {
+  --color-cyber-black: #1a1a1c;
+  --color-cyber-surface: #121214;
+  --color-cyber-border: #2e2e32;
+  --color-action-neon: #ff003c;
+  --color-kalova-white: #ffffff;
+  --font-sans: "Inter", system-ui, sans-serif;
+}
+
+@layer base {
+  body {
+    @apply bg-cyber-black text-zinc-100 antialiased min-h-screen;
+    font-family: var(--font-sans);
+  }
+}
+
+@utility text-stock-alert {
+  color: var(--color-action-neon);
+  text-shadow:
+    0 0 16px rgb(255 0 60 / 0.95),
+    0 0 36px rgb(255 0 60 / 0.75),
+    0 0 56px rgb(255 0 102 / 0.4);
+}
+
+@utility border-scan-pulse {
+  animation: scan-border-pulse 1.25s ease-in-out infinite;
+}
+
+@keyframes scan-border-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 1px rgb(127 29 29 / 0.35), 0 0 12px rgb(255 0 60 / 0.12);
+    border-color: rgb(127 29 29 / 0.45);
+  }
+  50% {
+    box-shadow: 0 0 0 1px rgb(255 0 60 / 0.45), 0 0 22px rgb(255 0 60 / 0.28);
+    border-color: rgb(220 38 38 / 0.65);
+  }
+}
