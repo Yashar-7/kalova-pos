@@ -121,6 +121,52 @@ function downloadTextFile(filename, content) {
   URL.revokeObjectURL(url)
 }
 
+/** Beep corto vía Web Audio (sin archivo). */
+function playScanBeep() {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext
+    if (!Ctx) return
+    const ctx = new Ctx()
+    const o = ctx.createOscillator()
+    const g = ctx.createGain()
+    o.connect(g)
+    g.connect(ctx.destination)
+    o.type = 'sine'
+    o.frequency.value = 880
+    g.gain.setValueAtTime(0.07, ctx.currentTime)
+    g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.1)
+    o.start(ctx.currentTime)
+    o.stop(ctx.currentTime + 0.1)
+    setTimeout(() => void ctx.close(), 180)
+  } catch {
+    /* sin audio */
+  }
+}
+
+function CameraIcon(props) {
+  return (
+    <svg
+      className={props.className ?? ''}
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={2}
+      aria-hidden
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"
+      />
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"
+      />
+    </svg>
+  )
+}
+
 export default function App() {
   const savedSales = loadPersistedSalesState()
   const [products, setProducts] = useState(() => loadPersistedProducts())
@@ -153,7 +199,8 @@ export default function App() {
     isLooseFood: false,
   })
   const [deleteConfirm, setDeleteConfirm] = useState(null)
-  const [showCameraScanner, setShowCameraScanner] = useState(false)
+  /** null | 'search' | 'new-product' — visor mínimo de cámara */
+  const [barcodeCameraTarget, setBarcodeCameraTarget] = useState(null)
   const [showF1Hint, setShowF1Hint] = useState(() =>
     typeof window !== 'undefined'
       ? window.matchMedia('(min-width: 640px)').matches
@@ -165,8 +212,6 @@ export default function App() {
   const searchScanTimerRef = useRef(null)
   const lastSearchDigitAtRef = useRef(0)
   const [scannerFeed, setScannerFeed] = useState(null)
-  const handleScanCodeRef = useRef(null)
-  const cameraScannerRef = useRef(null)
 
   const filtered = useMemo(() => {
     const q = query.trim()
@@ -273,7 +318,7 @@ export default function App() {
         saleGramsProductId ||
         editingProductId ||
         deleteConfirm ||
-        showCameraScanner
+        barcodeCameraTarget
       ) {
         return
       }
@@ -319,11 +364,9 @@ export default function App() {
       showSaleToast,
       editingProductId,
       deleteConfirm,
-      showCameraScanner,
+      barcodeCameraTarget,
     ],
   )
-
-  handleScanCodeRef.current = handleScanCode
 
   useEffect(() => {
     const mq = window.matchMedia('(min-width: 640px)')
@@ -343,7 +386,7 @@ export default function App() {
         saleGramsProductId ||
         editingProductId ||
         deleteConfirm ||
-        showCameraScanner
+        barcodeCameraTarget
       ) {
         e.preventDefault()
         return
@@ -362,14 +405,14 @@ export default function App() {
     saleGramsProductId,
     editingProductId,
     deleteConfirm,
-    showCameraScanner,
+    barcodeCameraTarget,
   ])
 
   useEffect(() => {
     function onEsc(e) {
       if (e.key !== 'Escape') return
-      if (showCameraScanner) {
-        setShowCameraScanner(false)
+      if (barcodeCameraTarget) {
+        setBarcodeCameraTarget(null)
         return
       }
       if (deleteConfirm) {
@@ -384,57 +427,85 @@ export default function App() {
     }
     window.addEventListener('keydown', onEsc)
     return () => window.removeEventListener('keydown', onEsc)
-  }, [showCameraScanner, deleteConfirm, editingProductId])
+  }, [barcodeCameraTarget, deleteConfirm, editingProductId])
 
   useEffect(() => {
-    if (!showCameraScanner) return undefined
+    if (!barcodeCameraTarget) return undefined
 
-    let cancelled = false
+    const target = barcodeCameraTarget
+    let alive = true
+    const scannerRef = { current: null }
 
-    import('html5-qrcode').then(
-      ({ Html5QrcodeScanner, Html5QrcodeSupportedFormats }) => {
-        if (cancelled) return
-
-        const scanner = new Html5QrcodeScanner(
-          'kalova-camera-reader',
-          {
-            fps: 12,
-            qrbox: { width: 280, height: 160 },
-            aspectRatio: 1.777778,
-            formatsToSupport: [
-              Html5QrcodeSupportedFormats.EAN_13,
-              Html5QrcodeSupportedFormats.EAN_8,
-              Html5QrcodeSupportedFormats.CODE_128,
-              Html5QrcodeSupportedFormats.UPC_A,
-              Html5QrcodeSupportedFormats.UPC_E,
-              Html5QrcodeSupportedFormats.QR_CODE,
-            ],
-          },
-          false,
+    ;(async () => {
+      try {
+        const { Html5Qrcode, Html5QrcodeSupportedFormats } = await import(
+          'html5-qrcode',
         )
-        cameraScannerRef.current = scanner
-        scanner.render(
+        if (!alive) return
+        const html5 = new Html5Qrcode('kalova-barcode-reader', false)
+        scannerRef.current = html5
+        const formats = [
+          Html5QrcodeSupportedFormats.EAN_13,
+          Html5QrcodeSupportedFormats.EAN_8,
+          Html5QrcodeSupportedFormats.CODE_128,
+          Html5QrcodeSupportedFormats.UPC_A,
+          Html5QrcodeSupportedFormats.UPC_E,
+          Html5QrcodeSupportedFormats.QR_CODE,
+        ]
+        await html5.start(
+          { facingMode: 'environment' },
+          {
+            fps: 10,
+            qrbox: { width: 280, height: 160 },
+            formatsToSupport: formats,
+          },
           (decodedText) => {
-            const digits = String(decodedText).replace(/\D/g, '')
-            if (digits.length < MIN_CODE_LEN) return
-            handleScanCodeRef.current?.(digits)
-            void scanner.clear().finally(() => {
-              cameraScannerRef.current = null
-              setShowCameraScanner(false)
-            })
+            if (!alive) return
+            alive = false
+            const h = scannerRef.current
+            scannerRef.current = null
+            playScanBeep()
+            const raw = String(decodedText).trim()
+            const digits = raw.replace(/\D/g, '')
+            const value = digits || raw
+            if (target === 'search') setQuery(value)
+            if (target === 'new-product') {
+              setForm((f) => ({
+                ...f,
+                barcode: digits || raw.replace(/\D/g, ''),
+              }))
+            }
+            if (h) {
+              void h
+                .stop()
+                .then(() => h.clear())
+                .catch(() => {})
+                .finally(() => setBarcodeCameraTarget(null))
+            } else {
+              setBarcodeCameraTarget(null)
+            }
           },
           () => {},
         )
-      },
-    )
+      } catch {
+        if (alive) {
+          setToast('No se pudo abrir la cámara.')
+          setBarcodeCameraTarget(null)
+        }
+      }
+    })()
 
     return () => {
-      cancelled = true
-      const s = cameraScannerRef.current
-      cameraScannerRef.current = null
-      if (s) void s.clear().catch(() => {})
+      alive = false
+      const h = scannerRef.current
+      scannerRef.current = null
+      if (h)
+        void h
+          .stop()
+          .then(() => h.clear())
+          .catch(() => {})
     }
-  }, [showCameraScanner])
+  }, [barcodeCameraTarget])
 
   useEffect(() => {
     return () => {
@@ -791,77 +862,65 @@ export default function App() {
         </section>
 
         <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
-          <div className="relative w-full sm:max-w-md">
-            <span
-              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
-              aria-hidden
-            >
-              <svg
-                className="h-4 w-4"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth={2}
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                />
-              </svg>
-            </span>
-            <input
-              ref={productSearchRef}
-              id="product-search"
-              type="search"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={onProductSearchKeyDown}
-              onBlur={() => setIsScanning(false)}
-              placeholder={
-                showF1Hint
-                  ? 'Buscar por nombre o escanear código (F1)…'
-                  : 'Buscar por nombre o código de barras…'
-              }
-              autoComplete="off"
-              className="w-full rounded-xl border border-red-900/50 bg-[#121214] py-2.5 pl-10 pr-4 text-sm font-medium text-white placeholder:text-gray-500 outline-none ring-[#ff003c]/25 transition focus:border-[#ff003c]/40 focus:ring-2"
-            />
-          </div>
-          <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-            <button
-              type="button"
-              onClick={() => setShowCameraScanner(true)}
-              disabled={showAddForm || editingProductId || saleGramsProductId}
-              className="inline-flex items-center gap-2 rounded-xl border border-red-900/50 bg-[#121214] px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-white shadow-[inset_0_1px_0_rgb(255_0_60_/0.12)] transition hover:border-[#ff003c]/35 hover:text-[#ff003c] disabled:cursor-not-allowed disabled:opacity-40"
-              aria-label="Abrir escaneo con cámara"
-            >
-              <svg
-                className="h-4 w-4 shrink-0 text-[#ff003c]"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth={2}
+          <div className="flex w-full gap-2 sm:max-w-md">
+            <div className="relative min-w-0 flex-1">
+              <span
+                className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
                 aria-hidden
               >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"
-                />
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"
-                />
-              </svg>
-              Escaneo con cámara
+                <svg
+                  className="h-4 w-4"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                  />
+                </svg>
+              </span>
+              <input
+                ref={productSearchRef}
+                id="product-search"
+                type="search"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={onProductSearchKeyDown}
+                onBlur={() => setIsScanning(false)}
+                placeholder={
+                  showF1Hint
+                    ? 'Buscar por nombre o escanear código (F1)…'
+                    : 'Buscar por nombre o código de barras…'
+                }
+                autoComplete="off"
+                aria-label="Código de barras o búsqueda"
+                className="w-full rounded-xl border border-red-900/50 bg-[#121214] py-2.5 pl-10 pr-3 text-sm font-medium text-white placeholder:text-gray-500 outline-none ring-[#ff003c]/25 transition focus:border-[#ff003c]/40 focus:ring-2"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => setBarcodeCameraTarget('search')}
+              disabled={
+                !!barcodeCameraTarget ||
+                showAddForm ||
+                editingProductId ||
+                saleGramsProductId
+              }
+              className="flex h-[42px] w-11 shrink-0 items-center justify-center rounded-xl border-2 border-[#ff003c] bg-[#121214] text-[#ff003c] shadow-[0_0_16px_rgb(255_0_60_/0.25)] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
+              aria-label="Escanear código con la cámara"
+              title="Cámara"
+            >
+              <CameraIcon className="h-5 w-5" />
             </button>
-            <p className="text-xs text-gray-400">
-              {filtered.length} producto
-              {filtered.length !== 1 ? 's' : ''} visible
-              {query.trim() ? ` · «${query.trim()}»` : ''}
-            </p>
           </div>
+          <p className="text-xs text-gray-400">
+            {filtered.length} producto
+            {filtered.length !== 1 ? 's' : ''} visible
+            {query.trim() ? ` · «${query.trim()}»` : ''}
+          </p>
         </div>
 
         <div
@@ -895,7 +954,7 @@ export default function App() {
               <p className="text-[11px] font-bold uppercase tracking-wide text-[#ff003c]">
                 {showF1Hint
                   ? 'MODO ESCÁNER ACTIVO (Presiona F1 para buscar por código)'
-                  : 'MODO ESCÁNER — Usá «Escaneo con cámara» o escribí el código en la búsqueda'}
+                  : 'MODO ESCÁNER — Cámara junto al campo o escribí el código'}
               </p>
               {scannerFeed && (
                 <p
@@ -1245,18 +1304,34 @@ export default function App() {
                 />
               </div>
               <div>
-                <label className="text-xs text-gray-400">
+                <label
+                  className="text-xs text-gray-400"
+                  htmlFor="new-product-barcode"
+                >
                   Código de barras (EAN)
                 </label>
-                <input
-                  value={form.barcode}
-                  onChange={(e) =>
-                    setForm((f) => ({ ...f, barcode: e.target.value }))
-                  }
-                  placeholder="Opcional · numérico"
-                  inputMode="numeric"
-                  className="mt-1 w-full rounded-xl border border-white/5 bg-[#121214] px-3 py-2 text-sm font-medium text-white outline-none ring-[#ff003c]/20 placeholder:text-gray-600 focus:border-[#ff003c]/35 focus:ring-2"
-                />
+                <div className="mt-1 flex gap-2">
+                  <input
+                    id="new-product-barcode"
+                    value={form.barcode}
+                    onChange={(e) =>
+                      setForm((f) => ({ ...f, barcode: e.target.value }))
+                    }
+                    placeholder="Opcional · numérico"
+                    inputMode="numeric"
+                    className="min-w-0 flex-1 rounded-xl border border-white/5 bg-[#121214] px-3 py-2 text-sm font-medium text-white outline-none ring-[#ff003c]/20 placeholder:text-gray-600 focus:border-[#ff003c]/35 focus:ring-2"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setBarcodeCameraTarget('new-product')}
+                    disabled={!!barcodeCameraTarget}
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border-2 border-[#ff003c] bg-[#1a1a1c] text-[#ff003c] shadow-[0_0_14px_rgb(255_0_60_/0.22)] transition hover:brightness-110 disabled:opacity-40"
+                    aria-label="Escanear código con la cámara"
+                    title="Cámara"
+                  >
+                    <CameraIcon className="h-5 w-5" />
+                  </button>
+                </div>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -1509,44 +1584,39 @@ export default function App() {
         </div>
       )}
 
-      {/* Modal: escaneo con cámara (html5-qrcode) */}
-      {showCameraScanner && (
+      {/* Visor mínimo: solo video (Html5Qrcode) */}
+      {barcodeCameraTarget && (
         <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/85 p-4 backdrop-blur-md"
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
           data-no-scan
           role="dialog"
           aria-modal="true"
-          aria-labelledby="camera-scan-title"
+          aria-labelledby="barcode-viewer-title"
+          onClick={() => setBarcodeCameraTarget(null)}
         >
-          <div className="max-h-[min(92vh,640px)] w-full max-w-lg overflow-hidden rounded-2xl border border-red-900/50 bg-[#121214] shadow-[0_0_48px_rgb(255_0_60_/0.15)]">
-            <div className="flex items-start justify-between gap-3 border-b border-red-900/50 px-5 py-4">
-              <div>
-                <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-[#ff003c]">
-                  Lector móvil
-                </p>
-                <h2
-                  id="camera-scan-title"
-                  className="mt-1 text-base font-semibold text-white"
-                >
-                  Escaneo con cámara
-                </h2>
-                <p className="mt-1 text-xs text-gray-500">
-                  Permití acceso a la cámara. Apuntá al código de barras o QR
-                  del producto.
-                </p>
-              </div>
+          <div
+            className="relative w-full max-w-sm overflow-hidden rounded-xl border-2 border-[#ff003c] bg-black shadow-[0_0_28px_rgb(255_0_60_/0.45),0_0_60px_rgb(255_0_60_/0.15)]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-2 border-b border-red-900/60 bg-[#121214] px-3 py-2">
+              <h2
+                id="barcode-viewer-title"
+                className="text-xs font-semibold uppercase tracking-wide text-[#ff003c]"
+              >
+                Cámara · códigos
+              </h2>
               <button
                 type="button"
-                onClick={() => setShowCameraScanner(false)}
-                className="shrink-0 rounded-lg border border-white/15 px-2.5 py-1 text-xs font-semibold text-gray-400 transition hover:border-[#ff003c]/40 hover:text-white"
-                aria-label="Cerrar escáner"
+                onClick={() => setBarcodeCameraTarget(null)}
+                className="rounded-md border border-white/20 px-2 py-1 text-xs text-gray-300 hover:border-[#ff003c]/50 hover:text-white"
               >
-                ✕
+                Cerrar
               </button>
             </div>
-            <div className="kalova-html5-qrcode-wrap max-h-[min(72vh,520px)] overflow-auto p-4">
-              <div id="kalova-camera-reader" className="min-h-[200px]" />
-            </div>
+            <div
+              id="kalova-barcode-reader"
+              className="min-h-[220px] w-full [&_video]:max-h-[50vh] [&_video]:w-full [&_video]:object-cover"
+            />
           </div>
         </div>
       )}
