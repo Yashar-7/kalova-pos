@@ -36,6 +36,7 @@ function createProduct({
 }
 
 const STORAGE_PRODUCTS_KEY = 'pet-shop:inventory-v2'
+/** Historial de ventas del día, totales por método y gastos — no incluye carrito. */
 const STORAGE_CAJA_KEY = 'pet-shop:caja-v1'
 
 const PAYMENT_METHODS = [
@@ -290,6 +291,8 @@ export default function App() {
    * array = resultados para «Toque para agregar» (nunca el catálogo completo).
    */
   const [productoSeleccionado, setProductoSeleccionado] = useState(null)
+  /** Tarjeta «último producto» en venta; solo memoria, se limpia al cobrar o refrescar. */
+  const [ultimoProductoEscaneado, setUltimoProductoEscaneado] = useState(null)
 
   const DIGIT_GAP_MS = 135
   const SCAN_IDLE_FLUSH_MS = 95
@@ -353,6 +356,7 @@ export default function App() {
     [],
   )
 
+  /** Persistencia: solo inventario. El carrito, búsqueda y montos de cobro no se guardan. */
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_PRODUCTS_KEY, JSON.stringify(products))
@@ -361,6 +365,7 @@ export default function App() {
     }
   }, [products])
 
+  /** Historial acumulado del día (ventas + gastos). Carrito en memoria únicamente. */
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_CAJA_KEY, JSON.stringify(caja))
@@ -455,6 +460,11 @@ export default function App() {
       })
       playScanBeep()
       setScannerFeed({ tone: 'ok', text: `${g} g → ${p.name}` })
+      setUltimoProductoEscaneado({
+        productId: p.id,
+        name: p.name,
+        barcode: p.barcode,
+      })
       window.setTimeout(() => setScannerFeed(null), 1600)
       return
     }
@@ -494,6 +504,11 @@ export default function App() {
     })
     playScanBeep()
     setScannerFeed({ tone: 'ok', text: `+ ${p.name}` })
+    setUltimoProductoEscaneado({
+      productId: p.id,
+      name: p.name,
+      barcode: p.barcode,
+    })
     window.setTimeout(() => setScannerFeed(null), 1600)
   }, [])
 
@@ -513,6 +528,11 @@ export default function App() {
         return true
       }
       if (p.isLooseFood) {
+        setUltimoProductoEscaneado({
+          productId: p.id,
+          name: p.name,
+          barcode: p.barcode,
+        })
         setCartLooseProductId(p.id)
         setGramsInput('')
         setIsScanning(false)
@@ -566,7 +586,10 @@ export default function App() {
     })
   }
 
-  /** Después de cobrar: carrito, montos, vuelto (derivado), búsqueries y foco en escáner. */
+  /**
+   * Post-venta / reset de UI de cobro: carrito vacío, sin sugerencias ni último escaneo,
+   * paga con en cero (vuelto deriva), cierra grám. / cámara si quedaron abiertos.
+   */
   function resetTacticoVenta() {
     if (searchScanTimerRef.current) {
       window.clearTimeout(searchScanTimerRef.current)
@@ -575,7 +598,11 @@ export default function App() {
     searchScanBufRef.current = ''
     lastSearchDigitAtRef.current = 0
     setCart([])
+    setCartLooseProductId(null)
+    setGramsInput('')
+    setBarcodeCameraTarget(null)
     setProductoSeleccionado(null)
+    setUltimoProductoEscaneado(null)
     setPagaCon('')
     setQuery('')
     setScannerFeed(null)
@@ -648,6 +675,24 @@ export default function App() {
 
   function confirmarPagoTransferencia() {
     finalizeSale('transferencia')
+  }
+
+  function reiniciarBalanceDiario() {
+    if (
+      !window.confirm(
+        '¿Reiniciar balance diario? Se borrarán en este equipo las ventas registradas hoy (tickets e importes por método). Los gastos anotados se conservan. El inventario no cambia.',
+      )
+    ) {
+      return
+    }
+    setCaja((c) => ({
+      ...c,
+      total: 0,
+      transactions: 0,
+      byMethod: { efectivo: 0, tarjeta: 0, qr: 0, transferencia: 0 },
+      sales: [],
+    }))
+    setToast('Balance diario reiniciado. Ventas de hoy en cero.')
   }
 
   function confirmCartLooseGrams() {
@@ -1165,6 +1210,20 @@ export default function App() {
                 )}
               </div>
 
+              {ultimoProductoEscaneado && (
+                <div className="rounded-xl border border-[#ff003c]/35 bg-[#121214] px-4 py-3 shadow-[inset_0_1px_0_rgb(255_0_60_/0.12)]">
+                  <p className="text-[10px] font-bold uppercase tracking-wide text-zinc-500">
+                    Último producto escaneado
+                  </p>
+                  <p className="mt-0.5 text-base font-semibold text-white">
+                    {ultimoProductoEscaneado.name}
+                  </p>
+                  <p className="mt-0.5 font-mono text-xs text-zinc-500">
+                    {ultimoProductoEscaneado.barcode}
+                  </p>
+                </div>
+              )}
+
               <div className="max-h-[min(40vh,320px)] overflow-y-auto rounded-xl border border-red-900/40 bg-[#121214] p-2 sm:max-h-[280px]">
                 {productoSeleccionado === null ? (
                   <div className="flex min-h-[140px] flex-col items-center justify-center px-4 py-10 text-center">
@@ -1191,6 +1250,11 @@ export default function App() {
                             type="button"
                             disabled={p.stock < 1}
                             onClick={() => {
+                              setUltimoProductoEscaneado({
+                                productId: p.id,
+                                name: p.name,
+                                barcode: p.barcode,
+                              })
                               if (p.isLooseFood) {
                                 setCartLooseProductId(p.id)
                                 setGramsInput('')
@@ -1385,6 +1449,13 @@ export default function App() {
                     className="rounded-xl border border-white/20 px-4 py-2.5 text-xs font-bold uppercase text-white hover:bg-white/10"
                   >
                     Cierre .txt
+                  </button>
+                  <button
+                    type="button"
+                    onClick={reiniciarBalanceDiario}
+                    className="rounded-xl border border-stock-alert/50 bg-[#ff003c]/10 px-4 py-2.5 text-xs font-bold uppercase text-[#ff003c] hover:bg-[#ff003c]/20"
+                  >
+                    Reiniciar balance diario
                   </button>
                 </div>
               </div>
