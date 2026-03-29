@@ -285,16 +285,14 @@ export default function App() {
   const searchScanTimerRef = useRef(null)
   const lastSearchDigitAtRef = useRef(0)
   const [scannerFeed, setScannerFeed] = useState(null)
+  /**
+   * null = sin búsqueda (pantalla lista para cliente nuevo).
+   * array = resultados para «Toque para agregar» (nunca el catálogo completo).
+   */
+  const [productoSeleccionado, setProductoSeleccionado] = useState(null)
 
   const DIGIT_GAP_MS = 135
   const SCAN_IDLE_FLUSH_MS = 95
-
-  const filtered = useMemo(() => {
-    const q = query.trim()
-    if (!q) return products
-    if (/^\d{4,}$/.test(q)) return products
-    return products.filter((p) => p.name.toLowerCase().includes(q.toLowerCase()))
-  }, [products, query])
 
   const cartLooseProduct = useMemo(
     () => products.find((p) => p.id === cartLooseProductId) ?? null,
@@ -393,6 +391,27 @@ export default function App() {
         window.clearTimeout(searchScanTimerRef.current)
     }
   }, [])
+
+  useEffect(() => {
+    if (mainTab !== 'venta') {
+      setProductoSeleccionado(null)
+      return
+    }
+    const q = query.trim()
+    if (!q) {
+      setProductoSeleccionado(null)
+      return
+    }
+    let list
+    if (/^\d{4,}$/.test(q)) {
+      list = products.filter((pItem) => pItem.barcode.includes(q))
+    } else {
+      list = products.filter((pItem) =>
+        pItem.name.toLowerCase().includes(q.toLowerCase()),
+      )
+    }
+    setProductoSeleccionado(list.slice(0, 50))
+  }, [mainTab, query, products])
 
   const addLineToCart = useCallback((p, opts) => {
     const { qty = 1, grams = 0 } = opts || {}
@@ -556,6 +575,7 @@ export default function App() {
     searchScanBufRef.current = ''
     lastSearchDigitAtRef.current = 0
     setCart([])
+    setProductoSeleccionado(null)
     setPagaCon('')
     setQuery('')
     setScannerFeed(null)
@@ -613,6 +633,7 @@ export default function App() {
     setToast(`Venta ${PAYMENT_METHODS.find((m) => m.key === methodKey)?.label || ''}: ${formatArs(total)}`)
   }
 
+  /** Tras un cobro exitoso, `finalizeSale` → `resetTacticoVenta` limpia carrito y `productoSeleccionado`. */
   function confirmarPagoEfectivo() {
     finalizeSale('efectivo')
   }
@@ -1145,49 +1166,60 @@ export default function App() {
               </div>
 
               <div className="max-h-[min(40vh,320px)] overflow-y-auto rounded-xl border border-red-900/40 bg-[#121214] p-2 sm:max-h-[280px]">
-                <p className="px-2 py-1 text-[10px] font-bold uppercase text-zinc-500">
-                  Toque para agregar
-                </p>
-                <ul className="space-y-1">
-                  {filtered.length === 0 ? (
-                    <li className="px-3 py-8 text-center text-sm text-zinc-500">
-                      Sin productos que coincidan.
-                    </li>
-                  ) : (
-                    filtered.map((p) => (
-                      <li key={p.id}>
-                        <button
-                          type="button"
-                          disabled={p.stock < 1}
-                          onClick={() => {
-                            if (p.isLooseFood) {
-                              setCartLooseProductId(p.id)
-                              setGramsInput('')
-                            } else addLineToCart(p, { qty: 1 })
-                          }}
-                          className="flex w-full items-center justify-between gap-2 rounded-lg border border-transparent px-3 py-2.5 text-left transition hover:border-[#ff003c]/30 hover:bg-[#1a1a1c] disabled:opacity-35"
-                        >
-                          <span className="font-medium text-white">
-                            {p.name}
-                            {p.isLooseFood && (
-                              <span className="ml-2 text-[10px] text-zinc-500">
-                                granel
-                              </span>
-                            )}
-                          </span>
-                          <span className="shrink-0 text-sm font-semibold text-[#ff003c]">
-                            {formatArs(p.priceSale)}
-                            {p.isLooseFood && (
-                              <span className="text-[10px] text-zinc-500">
-                                /kg
-                              </span>
-                            )}
-                          </span>
-                        </button>
-                      </li>
-                    ))
-                  )}
-                </ul>
+                {productoSeleccionado === null ? (
+                  <div className="flex min-h-[140px] flex-col items-center justify-center px-4 py-10 text-center">
+                    <p className="text-sm font-medium text-zinc-500">
+                      Esperando producto…
+                    </p>
+                    <p className="mt-1 text-xs text-zinc-600">
+                      Buscá, escaneá o tocá desde la lista cuando filtres.
+                    </p>
+                  </div>
+                ) : productoSeleccionado.length === 0 ? (
+                  <div className="px-3 py-10 text-center text-sm text-zinc-500">
+                    Sin coincidencias para «{query.trim()}».
+                  </div>
+                ) : (
+                  <>
+                    <p className="px-2 py-1 text-[10px] font-bold uppercase text-zinc-500">
+                      Toque para agregar
+                    </p>
+                    <ul className="space-y-1">
+                      {productoSeleccionado.map((p) => (
+                        <li key={p.id}>
+                          <button
+                            type="button"
+                            disabled={p.stock < 1}
+                            onClick={() => {
+                              if (p.isLooseFood) {
+                                setCartLooseProductId(p.id)
+                                setGramsInput('')
+                              } else addLineToCart(p, { qty: 1 })
+                            }}
+                            className="flex w-full items-center justify-between gap-2 rounded-lg border border-transparent px-3 py-2.5 text-left transition hover:border-[#ff003c]/30 hover:bg-[#1a1a1c] disabled:opacity-35"
+                          >
+                            <span className="font-medium text-white">
+                              {p.name}
+                              {p.isLooseFood && (
+                                <span className="ml-2 text-[10px] text-zinc-500">
+                                  granel
+                                </span>
+                              )}
+                            </span>
+                            <span className="shrink-0 text-sm font-semibold text-[#ff003c]">
+                              {formatArs(p.priceSale)}
+                              {p.isLooseFood && (
+                                <span className="text-[10px] text-zinc-500">
+                                  /kg
+                                </span>
+                              )}
+                            </span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                )}
               </div>
 
               <div className="rounded-2xl border border-red-900/50 bg-[#121214] p-4 shadow-[inset_0_1px_0_rgb(255_255_255_/0.04)]">
